@@ -1,0 +1,95 @@
+public class ContractAdobeSignController {
+
+    @AuraEnabled
+    public static Id sendAgreementFromContract(Id contractId) {
+        if (contractId == null) {
+            throw new AuraHandledException('Contract Id is required');
+        }
+
+        // Step 1: Get Contract and Account
+        Contract contract = [
+            SELECT Id, AccountId,ContractNumber,Name
+            FROM Contract 
+            WHERE Id = :contractId 
+            LIMIT 1
+        ];
+        System.debug('Fetched Contract: ' + contract);
+
+        if (contract.AccountId == null) {
+            throw new AuraHandledException('No Account associated with this Contract');
+        }
+
+        // Step 2: Get primary Contact of Account
+        Contact primaryContact = [
+            SELECT Id, Email 
+            FROM Contact 
+            WHERE AccountId = :contract.AccountId 
+            LIMIT 1
+        ];
+        System.debug('Primary Contact: ' + primaryContact);
+
+        if (primaryContact == null) {
+            throw new AuraHandledException('No Contact found for this Account');
+        }
+
+        // Step 3: Create Agreement
+        echosign_dev1__SIGN_Agreement__c agreement = new echosign_dev1__SIGN_Agreement__c(
+            Name = 'Agreement for Contract- '+contract.ContractNumber ,
+            echosign_dev1__Recipient__c = primaryContact.Id,
+            echosign_dev1__Contract__c = contract.Id,
+            echosign_dev1__Account__c = contract.AccountId
+        );
+        insert agreement;
+        System.debug('Inserted Agreement: ' + agreement);
+
+        // Step 4: Attach related Contract document to the Agreement
+        attachContractDocumentToAgreement(contract.Id, agreement.Id);
+
+        return agreement.Id;
+    }
+
+    private static void attachContractDocumentToAgreement(Id contractId, Id agreementId) {
+        System.debug('Starting document attachment for contract: ' + contractId + ', agreement: ' + agreementId);
+
+        // Step 1: Get active ContractDocumentVersion
+        List<ContractDocumentVersion> versions = [
+            SELECT Id 
+            FROM ContractDocumentVersion 
+            WHERE ContractId = :contractId 
+              AND Status = 'Active'
+            LIMIT 1
+        ];
+        if (versions.isEmpty()) {
+            System.debug('No active ContractDocumentVersion found');
+            return;
+        }
+        Id versionId = versions[0].Id;
+        System.debug('Found ContractDocumentVersion: ' + versionId);
+
+        // Step 2: Get ContentDocumentId from ContractDocVerContentDoc
+        List<ContractDocVerContentDoc> docLinks = [
+            SELECT ContentDocumentId 
+            FROM ContractDocVerContentDoc 
+            WHERE ContractDocumentVersionId = :versionId 
+              AND DocumentType = 'ContractDocument'
+            LIMIT 1
+        ];
+        if (docLinks.isEmpty()) {
+            System.debug('No ContractDocVerContentDoc found');
+            return;
+        }
+
+        Id contentDocId = docLinks[0].ContentDocumentId;
+        System.debug('Found ContentDocumentId: ' + contentDocId);
+
+        // Step 3: Create ContentDocumentLink to attach to Agreement
+        ContentDocumentLink link = new ContentDocumentLink();
+        link.ContentDocumentId = contentDocId;
+        link.LinkedEntityId = agreementId;
+        link.ShareType = 'V';
+        link.Visibility = 'AllUsers';
+
+        insert link;
+        System.debug('Attached ContentDocument to Agreement successfully');
+    }
+}
